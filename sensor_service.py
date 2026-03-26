@@ -4,7 +4,7 @@ import numpy as np
 # Import your drivers
 from drivers.max30102_driver import MAX30102
 from drivers.imu_mpu6050 import MPU6050Driver
-from drivers.adc_ads1115 import ADS1115Driver
+from drivers.emg_adc import EMGADC
 
 
 class SensorService:
@@ -12,15 +12,16 @@ class SensorService:
         # Initialize sensors
         self.ppg = MAX30102()
         self.mpu = MPU6050Driver()
-        self.emg = ADS1115Driver()
+        self.emg = EMGADC()
 
         # Buffers
-        self.ppg_buffer = []
-        self.time_buffer = []
-        self.emg_buffer = []
-        self.acc_buffer = []
-
+        from collections import deque
         self.BUFFER_SIZE = 200
+        
+        self.ppg_buffer = deque(maxlen=self.BUFFER_SIZE)
+        self.time_buffer = deque(maxlen=self.BUFFER_SIZE)
+        self.emg_buffer = deque(maxlen=self.BUFFER_SIZE)
+        self.acc_buffer = deque(maxlen=self.BUFFER_SIZE)
 
     # -------------------------
     # FEATURE FUNCTIONS
@@ -95,8 +96,8 @@ class SensorService:
     def update(self):
         # Read sensors
         red, ir = self.ppg.read_fifo()
-        accel = self.mpu.get_accel_data()
-        emg_val = self.emg.read()
+        accel = self.mpu.read_accel()
+        emg_val = self.emg.read_voltage()
 
         # Store data
         self.ppg_buffer.append(ir)
@@ -104,12 +105,7 @@ class SensorService:
         self.emg_buffer.append(emg_val)
         self.acc_buffer.append([accel['x'], accel['y'], accel['z']])
 
-        # Maintain buffer size
-        if len(self.ppg_buffer) > self.BUFFER_SIZE:
-            self.ppg_buffer.pop(0)
-            self.time_buffer.pop(0)
-            self.emg_buffer.pop(0)
-            self.acc_buffer.pop(0)
+        # Maintain buffer size happens automatically with deque
 
         # Compute features
         bpm, rr = self.compute_bpm_and_rr()

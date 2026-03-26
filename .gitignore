@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.swp
+*.save
+
+# Data (large files)
+data/*.csv
+data/WESAD/
+data/model_metrics.json
+
+# Models (regenerate with train_advanced.py)
+ml/models/*.joblib
+
+# Editor / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
