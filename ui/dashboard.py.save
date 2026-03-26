@@ -1,0 +1,45 @@
+
+2026-02-21 08:44:13.566 Uncaught app execution
+Traceback (most recent call last):
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 689, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/ui/dashboard.py", line 74, in <module>
+    baseline_samples.append(emg.read_voltage())
+                            ~~~~~~~~~~~~~~~~^^
+  File "/home/dhananjays/anxiety_sleep_project/drivers/emg_adc.py", line 14, in read_voltage
+    return self.chan.voltage
+           ^^^^^^^^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_ads1x15/analog_in.py", line 61, in voltage
+    volts = self.convert_to_voltage(self.value)
+                                    ^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_ads1x15/analog_in.py", line 56, in value
+    return self._ads.read(pin)
+           ~~~~~~~~~~~~~~^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_ads1x15/ads1x15.py", line 330, in read
+    return self._read(pin)
+           ~~~~~~~~~~^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_ads1x15/ads1x15.py", line 356, in _read
+    self._write_config(pin)
+    ~~~~~~~~~~~~~~~~~~^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_ads1x15/ads1x15.py", line 428, in _write_config
+    self._write_register(_ADS1X15_POINTER_CONFIG, config)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_ads1x15/ads1x15.py", line 392, in _write_register
+    i2c.write(self.buf)
+    ~~~~~~~~~^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_bus_device/i2c_device.py", line 96, in write
+    self.i2c.writeto(self.device_address, buf, start=start, end=end)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/busio.py", line 222, in writeto
+    return self._i2c.writeto(address, memoryview(buffer)[start:end], stop=True)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/adafruit_blinka/microcontroller/generic_linux/i2c.py", line 60, in writeto
+    self._i2c_bus.write_bytes(address, buffer[start:end])
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dhananjays/anxiety_sleep_project/venv/lib/python3.13/site-packages/Adafruit_PureIO/smbus.py", line 303, in write_bytes
+    self._device.write(buf)
+    ~~~~~~~~~~~~~~~~~~^^^^^
+OSError: [Errno 121] Remote I/O error
