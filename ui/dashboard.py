@@ -19,16 +19,56 @@ import plotly.express as px
 from datetime import datetime
 
 from processing.filtering import bandpass_emg, lowpass_accel
-from processing.features import extract_emg_features, extract_accel_features
+from processing.features import extract_emg_features, extract_accel_features, extract_hrv_features
 
-# ─── SENSOR IMPORTS (graceful fallback for dev machine) ───────────────────────
-SENSORS_AVAILABLE = False
-try:
-    from drivers.emg_adc import EMGADC
-    from drivers.imu_mpu6050 import MPU6050Driver
-    SENSORS_AVAILABLE = True
-except Exception:
-    pass
+# ─── SENSOR BACKGROUND THREAD ─────────────────────────────────────────────────
+import threading
+import time
+
+@st.cache_resource
+def start_sensor_thread():
+    try:
+        from drivers.emg_adc import EMGADC
+        from drivers.imu_mpu6050 import MPU6050Driver
+        from drivers.max30102_driver import MAX30102
+        emg = EMGADC()
+        mpu = MPU6050Driver()
+        ppg = MAX30102()
+    except Exception:
+        return None, None, None, None
+        
+    emg_buf = deque(maxlen=200*30)
+    acc_buf = deque(maxlen=50*30)
+    ppg_buf = deque(maxlen=50*30)
+    time_buf = deque(maxlen=50*30)
+    
+    def poll_sensors():
+        last_emg = time.time()
+        last_acc = time.time()
+        while True:
+            now = time.time()
+            if now - last_emg >= 1 / 200:
+                try: emg_buf.append(emg.read_voltage())
+                except: pass
+                last_emg = now
+            if now - last_acc >= 1 / 50:
+                try: 
+                    acc = mpu.read_accel()
+                    acc_buf.append([acc["x"], acc["y"], acc["z"]])
+                    red, ir = ppg.read_fifo()
+                    if ir > 0:
+                        ppg_buf.append(ir)
+                        time_buf.append(now)
+                except: pass
+                last_acc = now
+            time.sleep(0.001)
+
+    t = threading.Thread(target=poll_sensors, daemon=True)
+    t.start()
+    return emg_buf, acc_buf, ppg_buf, time_buf
+
+emg_q, acc_q, ppg_q, time_q = start_sensor_thread()
+SENSORS_AVAILABLE = (emg_q is not None)
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -217,6 +257,8 @@ if os.path.exists(METRICS_F):
 defaults = {
     "emg_buffer":      [],
     "acc_buffer":      [],
+    "ppg_buffer":      [],
+    "time_buffer":     [],
     "stress_history":  deque(maxlen=HISTORY_LEN),
     "bpm_history":     deque(maxlen=HISTORY_LEN),
     "session_log":     [],
@@ -227,12 +269,7 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ─── INIT SENSORS ─────────────────────────────────────────────────────────────
-if SENSORS_AVAILABLE:
-    if "emg_sensor" not in st.session_state:
-        st.session_state.emg_sensor = EMGADC()
-    if "mpu_sensor" not in st.session_state:
-        st.session_state.mpu_sensor = MPU6050Driver()
+# (Sensors now initialized globally inside the background thread)
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -317,13 +354,10 @@ st.markdown("""
 
 # ─── DATA COLLECTION ──────────────────────────────────────────────────────────
 if SENSORS_AVAILABLE and st.session_state.recording:
-    emg_s = st.session_state.emg_sensor
-    mpu_s = st.session_state.mpu_sensor
-    for _ in range(EMG_CHUNK):
-        st.session_state.emg_buffer.append(emg_s.read_voltage())
-    for _ in range(ACC_CHUNK):
-        acc = mpu_s.read_accel()
-        st.session_state.acc_buffer.append([acc["x"], acc["y"], acc["z"]])
+    st.session_state.emg_buffer = list(emg_q)
+    st.session_state.acc_buffer = list(acc_q)
+    st.session_state.ppg_buffer = list(ppg_q)
+    st.session_state.time_buffer = list(time_q)
 elif not SENSORS_AVAILABLE:
     # Demo: generate realistic synthetic signals
     t = len(st.session_state.emg_buffer)
@@ -336,10 +370,13 @@ elif not SENSORS_AVAILABLE:
             np.random.normal(0, 0.03),
             np.random.normal(0, 0.03),
         ])
+    st.session_state.ppg_buffer.append(0)
+    st.session_state.time_buffer.append(time.time())
 
-# Trim buffers
-st.session_state.emg_buffer = st.session_state.emg_buffer[-(EMG_FS * WINDOW_SEC):]
-st.session_state.acc_buffer = st.session_state.acc_buffer[-(ACC_FS * WINDOW_SEC):]
+# Trim buffers (only necessary strictly for demo, but safe here)
+if not SENSORS_AVAILABLE:
+    st.session_state.emg_buffer = st.session_state.emg_buffer[-(EMG_FS * WINDOW_SEC):]
+    st.session_state.acc_buffer = st.session_state.acc_buffer[-(ACC_FS * WINDOW_SEC):]
 
 # Check buffer readiness
 buf_emg_pct = len(st.session_state.emg_buffer) / (EMG_FS * WINDOW_SEC)
@@ -373,7 +410,35 @@ feature_row = [
     f_emg["emg_rms"], f_emg["emg_var"], f_emg["emg_mean"],
     f_acc["acc_mean"], f_acc["acc_std"],  f_acc["acc_max"],
 ]
-# If model expects 10 features (WESAD), pad with HRV/EDA zeros
+
+# HRV & BPM computation from real PPG
+def compute_rr_and_bpm(signal, times):
+    if len(signal) < 20: return 0, []
+    sig = np.array(signal)
+    rng = np.max(sig) - np.min(sig)
+    if rng < 500: return 0, []
+    sig = (sig - np.min(sig)) / (rng + 1e-6)
+    
+    peaks = []
+    for i in range(1, len(sig)-1):
+        if sig[i] > 0.5 and sig[i] > sig[i-1] and sig[i] > sig[i+1]:
+            peaks.append(i)
+            
+    filtered = []
+    for p in peaks:
+        if not filtered or (times[p] - times[filtered[-1]]) > 0.4:
+            filtered.append(p)
+            
+    if len(filtered) < 2: return 0, []
+    rr = [times[filtered[i]] - times[filtered[i-1]] for i in range(1, len(filtered))]
+    if np.mean(rr) <= 0: return 0, []
+    bpm = int(60 / np.mean(rr))
+    if not (30 <= bpm <= 220): return 0, []
+    return bpm, rr
+
+bpm_val, rr_intervals = compute_rr_and_bpm(st.session_state.ppg_buffer, st.session_state.time_buffer)
+hrv_feats = extract_hrv_features(rr_intervals)
+
 try:
     n_feats = model.n_features_in_
 except AttributeError:
@@ -383,25 +448,32 @@ except AttributeError:
         n_feats = 6
 
 if n_feats == 10:
-    # Use neutral/mid-range HRV values instead of 0.0 to avoid stressing the model
-    # Typical resting values: rmssd~0.04s, sdnn~0.05s, pnn50~0.3, eda~2.0uS
-    feature_row += [0.04, 0.05, 0.30, 2.0]  # hrv_rmssd, hrv_sdnn, hrv_pnn50, eda_mean
+    # Use real HRV from PPG if available, else fallback to neutral values to avoid false stress
+    r_rmssd = hrv_feats["hrv_rmssd"] if hrv_feats["hrv_rmssd"] > 0 else 0.04
+    r_sdnn  = hrv_feats["hrv_sdnn"] if hrv_feats["hrv_sdnn"] > 0 else 0.05
+    r_pnn50 = hrv_feats["hrv_pnn50"] if hrv_feats["hrv_pnn50"] > 0 else 0.30
+    feature_row += [r_rmssd, r_sdnn, r_pnn50, 2.0]  # eda proxy
 
 features = [feature_row]
 
 # ─── PREDICTION ───────────────────────────────────────────────────────────────
 try:
+    # Option to increase precision with manual threshold
+    STRESS_THRESHOLD = 0.65
     stress_prob = float(model.predict_proba(features)[0][1])
+    # if you want to hard threshold to binary: stress_prob = 1.0 if stress_prob > STRESS_THRESHOLD else 0.0
 except Exception:
     stress_prob = float(model.predict(features)[0]) * 0.9
 
 st.session_state.stress_history.append(stress_prob)
 
-# BPM estimate from acc (motion proxy)
-# Use a gentler scaling: typical resting acc_f.std ~ 0.01-0.05 m/s²
-# Scale so that std=0 -> 60 BPM, std=0.5 -> ~110 BPM (physiologically reasonable)
-acc_std_val = float(acc_f.std())
-bpm_est = max(50, min(110, int(60 + acc_std_val * 100)))
+# Use real PPG BPM if available, fallback to ACC motion proxy
+if bpm_val > 0:
+    bpm_est = bpm_val
+else:
+    acc_std_val = float(acc_f.std())
+    bpm_est = max(50, min(110, int(60 + acc_std_val * 100)))
+
 st.session_state.bpm_history.append(bpm_est)
 
 # Sleep stage
