@@ -383,7 +383,9 @@ except AttributeError:
         n_feats = 6
 
 if n_feats == 10:
-    feature_row += [0.0, 0.0, 0.0, 0.0]   # hrv_rmssd, hrv_sdnn, hrv_pnn50, eda_mean
+    # Use neutral/mid-range HRV values instead of 0.0 to avoid stressing the model
+    # Typical resting values: rmssd~0.04s, sdnn~0.05s, pnn50~0.3, eda~2.0uS
+    feature_row += [0.04, 0.05, 0.30, 2.0]  # hrv_rmssd, hrv_sdnn, hrv_pnn50, eda_mean
 
 features = [feature_row]
 
@@ -396,7 +398,10 @@ except Exception:
 st.session_state.stress_history.append(stress_prob)
 
 # BPM estimate from acc (motion proxy)
-bpm_est = max(50, min(120, int(60 + acc_f.std() * 1000)))
+# Use a gentler scaling: typical resting acc_f.std ~ 0.01-0.05 m/s²
+# Scale so that std=0 -> 60 BPM, std=0.5 -> ~110 BPM (physiologically reasonable)
+acc_std_val = float(acc_f.std())
+bpm_est = max(50, min(110, int(60 + acc_std_val * 100)))
 st.session_state.bpm_history.append(bpm_est)
 
 # Sleep stage

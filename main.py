@@ -23,6 +23,17 @@ _model_v2 = os.path.join(BASE_DIR, "ml", "models", "anxiety_model_v2.joblib")
 _model_v1 = os.path.join(BASE_DIR, "ml", "models", "anxiety_model.joblib")
 model = load(_model_v2 if os.path.exists(_model_v2) else _model_v1)
 
+# Detect how many features the model expects
+try:
+    N_FEATURES = model.n_features_in_
+except AttributeError:
+    try:
+        N_FEATURES = model.steps[-1][1].n_features_in_
+    except Exception:
+        N_FEATURES = 6
+
+print(f"Model loaded. Expects {N_FEATURES} features.")
+
 
 # ---------------- INIT ------------------
 emg = EMGADC()
@@ -66,14 +77,21 @@ while True:
         f_emg = extract_emg_features(emg_f)
         f_acc = extract_accel_features(acc_sig)
 
-        features = [[
+        feature_row = [
             f_emg["emg_rms"],
             f_emg["emg_var"],
             f_emg["emg_mean"],
             f_acc["acc_mean"],
             f_acc["acc_std"],
             f_acc["acc_max"]
-        ]]
+        ]
+
+        # If model expects 10 features (WESAD), pad with neutral HRV/EDA values.
+        # Sending zeros biases the model to always predict STRESSED.
+        if N_FEATURES == 10:
+            feature_row += [0.04, 0.05, 0.30, 2.0]  # hrv_rmssd, hrv_sdnn, hrv_pnn50, eda_mean
+
+        features = [feature_row]
 
         prediction = model.predict(features)[0]
 

@@ -49,17 +49,23 @@ class SensorService:
         if len(signal) < 20:
             return 0, []
 
+        # Guard: if signal is flat (sensor light off / disconnected),
+        # normalization turns noise into fake peaks -> bogus BPM
+        signal_range = np.max(signal) - np.min(signal)
+        if signal_range < 500:   # raw ADC counts; adjust if using different units
+            return 0, []
+
         # normalize
-        signal = (signal - np.min(signal)) / (np.max(signal) - np.min(signal) + 1e-6)
+        signal = (signal - np.min(signal)) / (signal_range + 1e-6)
 
         peaks = []
-        threshold = 0.6
+        threshold = 0.5  # lowered from 0.6 for better sensitivity
 
         for i in range(1, len(signal)-1):
             if signal[i] > threshold and signal[i] > signal[i-1] and signal[i] > signal[i+1]:
                 peaks.append(i)
 
-        # filter peaks
+        # filter peaks: minimum 0.4s gap (~150 BPM max)
         filtered = []
         min_gap = 0.4
 
@@ -75,7 +81,15 @@ class SensorService:
             dt = self.time_buffer[filtered[i]] - self.time_buffer[filtered[i-1]]
             rr.append(dt)
 
-        bpm = int(60 / np.mean(rr))
+        mean_rr = np.mean(rr)
+        if mean_rr <= 0:
+            return 0, []
+
+        bpm = int(60 / mean_rr)
+
+        # Physiological sanity check (30-220 BPM)
+        if not (30 <= bpm <= 220):
+            return 0, []
 
         return bpm, rr
 
@@ -99,13 +113,13 @@ class SensorService:
         accel = self.mpu.read_accel()
         emg_val = self.emg.read_voltage()
 
-        # Store data
-        self.ppg_buffer.append(ir)
-        self.time_buffer.append(time.time())
+        # Only store PPG sample if sensor returned real data (0,0 = FIFO empty)
+        if ir > 0:
+            self.ppg_buffer.append(ir)
+            self.time_buffer.append(time.time())
+
         self.emg_buffer.append(emg_val)
         self.acc_buffer.append([accel['x'], accel['y'], accel['z']])
-
-        # Maintain buffer size happens automatically with deque
 
         # Compute features
         bpm, rr = self.compute_bpm_and_rr()
