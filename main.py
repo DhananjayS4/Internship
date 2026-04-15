@@ -11,9 +11,13 @@ from processing.features import extract_emg_features, extract_accel_features
 
 
 # ---------------- CONFIG ----------------
-EMG_FS = 200
-ACC_FS = 50
+EMG_FS     = 200
+ACC_FS     = 50
 WINDOW_SEC = 3
+
+# Stress threshold: raise this if it always says STRESSED (try 0.70, 0.75)
+# Lower it if it never detects stress (try 0.55)
+STRESS_THRESHOLD = 0.65
 
 
 # ---------------- LOAD MODEL ----------------
@@ -32,7 +36,9 @@ except AttributeError:
     except Exception:
         N_FEATURES = 6
 
-print(f"Model loaded. Expects {N_FEATURES} features.")
+has_proba = hasattr(model, "predict_proba")
+print(f"Model loaded. Expects {N_FEATURES} features | predict_proba: {has_proba}")
+print(f"Stress threshold: {STRESS_THRESHOLD}")
 
 
 # ---------------- INIT ------------------
@@ -43,11 +49,12 @@ emg_window = SlidingWindow(WINDOW_SEC, EMG_FS)
 acc_window = SlidingWindow(WINDOW_SEC, ACC_FS)
 
 print("Starting REAL-TIME stress prediction...")
-
+print("-" * 50)
 
 # ---------------- LOOP ------------------
-last_acc = time.time()
-last_emg = time.time()
+last_acc   = time.time()
+last_emg   = time.time()
+debug_count = 0          # print feature values for first 5 windows
 
 while True:
     now = time.time()
@@ -68,10 +75,9 @@ while True:
         acc_sig = np.array(acc_window.get())
 
         # Filtering
-        emg_f = bandpass_emg(emg_sig, EMG_FS)
-
+        emg_f  = bandpass_emg(emg_sig, EMG_FS)
         acc_mag = np.linalg.norm(acc_sig, axis=1)
-        acc_f = lowpass_accel(acc_mag, ACC_FS)
+        acc_f  = lowpass_accel(acc_mag, ACC_FS)
 
         # Features
         f_emg = extract_emg_features(emg_f)
@@ -87,18 +93,29 @@ while True:
         ]
 
         # If model expects 10 features (WESAD), pad with neutral HRV/EDA values.
-        # Sending zeros biases the model to always predict STRESSED.
         if N_FEATURES == 10:
             feature_row += [0.04, 0.05, 0.30, 2.0]  # hrv_rmssd, hrv_sdnn, hrv_pnn50, eda_mean
 
         features = [feature_row]
 
-        prediction = model.predict(features)[0]
+        # Debug: print feature values for first 5 windows
+        if debug_count < 5:
+            print(f"[DEBUG window {debug_count+1}]")
+            print(f"  emg_rms={f_emg['emg_rms']:.6f}  emg_var={f_emg['emg_var']:.8f}  emg_mean={f_emg['emg_mean']:.6f}")
+            print(f"  acc_mean={f_acc['acc_mean']:.4f}  acc_std={f_acc['acc_std']:.4f}  acc_max={f_acc['acc_max']:.4f}")
+            debug_count += 1
 
-        if prediction == 0:
-            print("\U0001f7e2 RELAXED")
+        # Use predict_proba if available for adjustable threshold
+        if has_proba:
+            stress_prob = float(model.predict_proba(features)[0][1])
+            stressed = stress_prob >= STRESS_THRESHOLD
+            label = "STRESSED" if stressed else "RELAXED"
+            icon  = "\U0001f534" if stressed else "\U0001f7e2"
+            print(f"{icon} {label}  (stress prob: {stress_prob:.2f}  threshold: {STRESS_THRESHOLD})")
         else:
-            print("\U0001f534 STRESSED")
+            # Fallback to hard predict
+            prediction = model.predict(features)[0]
+            print("\U0001f7e2 RELAXED" if prediction == 0 else "\U0001f534 STRESSED")
 
         emg_window.clear()
         acc_window.clear()
